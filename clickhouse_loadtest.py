@@ -101,8 +101,8 @@ def main():
         'key_range': [1, 6000000]  # Range for random o_orderkey selection
     }
     
-    # Choose which table to test (change this line to switch tables)
-    table_config = table_config_orders  # or table_config_orders
+    # Run tests for both tables
+    table_configs = [table_config_lineitem, table_config_orders]
     
     # Connection parameters for ClickHouse
     connection_params = {
@@ -112,37 +112,66 @@ def main():
     }
     
     print(f"\n🎯 Load Test Configuration:")
-    print(f"   Target Table: {table_config['database']}.{table_config['table']}")
-    print(f"   Key Column: {table_config['key_column']} (range: {table_config['key_range'][0]}-{table_config['key_range'][1]})")
-    print(f"   Select Column: {table_config['select_column']}")
+    print(f"   Tables to test: lineitem, orders")
     print(f"   QPS values to test: {qps_values}")
     print(f"   Warmup duration: {warmup_seconds}s")
     print(f"   Test duration: {run_seconds}s")
-    print(f"   Total estimated time: {len(qps_values) * (warmup_seconds + run_seconds + 10) / 60:.1f} minutes")
+    print(f"   Total estimated time: {len(table_configs) * len(qps_values) * (warmup_seconds + run_seconds + 10) / 60:.1f} minutes")
     
-    # Run the load test suite using shared framework
-    test_results = run_load_test_suite(
-        connection_params=connection_params,
-        create_connection_func=create_clickhouse_connection,
-        execute_query_func=execute_clickhouse_query,
-        test_connection_func=test_clickhouse_connection,
-        qps_values=qps_values,
-        table_config=table_config,
-        warmup_seconds=warmup_seconds,
-        run_seconds=run_seconds,
-        database_name="ClickHouse"
-    )
+    all_results = []
     
-    if test_results:
-        # Generate reports using shared framework
-        csv_file, graph_file = generate_reports(test_results, table_config, "ClickHouse")
+    # Run tests for each table
+    for i, table_config in enumerate(table_configs):
+        table_name = table_config['table']
+        print(f"\n{'='*70}")
+        print(f"🚀 Starting Load Test {i+1}/{len(table_configs)}: {table_name.upper()} Table")
+        print(f"{'='*70}")
+        print(f"   Target Table: {table_config['database']}.{table_config['table']}")
+        print(f"   Key Column: {table_config['key_column']} (range: {table_config['key_range'][0]}-{table_config['key_range'][1]})")
+        print(f"   Select Column: {table_config['select_column']}")
         
-        print(f"\n🎉 ClickHouse load test suite completed!")
-        print(f"   CSV report: {csv_file}")
-        if graph_file:
-            print(f"   Performance graph: {graph_file}")
-    else:
-        print("❌ Load test suite failed")
+        # Run the load test suite using shared framework
+        test_results = run_load_test_suite(
+            connection_params=connection_params,
+            create_connection_func=create_clickhouse_connection,
+            execute_query_func=execute_clickhouse_query,
+            test_connection_func=test_clickhouse_connection,
+            qps_values=qps_values,
+            table_config=table_config,
+            warmup_seconds=warmup_seconds,
+            run_seconds=run_seconds,
+            database_name="ClickHouse"
+        )
+        
+        if test_results:
+            # Generate reports using shared framework
+            csv_file, graph_file = generate_reports(test_results, table_config, "ClickHouse")
+            
+            print(f"\n✅ {table_name.upper()} load test completed!")
+            print(f"   CSV report: {csv_file}")
+            if graph_file:
+                print(f"   Performance graph: {graph_file}")
+            
+            all_results.append({
+                'table': table_name,
+                'csv_file': csv_file,
+                'graph_file': graph_file,
+                'results': test_results
+            })
+        else:
+            print(f"❌ {table_name.upper()} load test failed")
+    
+    # Final summary
+    print(f"\n🎉 All ClickHouse load tests completed!")
+    print(f"📊 Summary of generated files:")
+    for result in all_results:
+        print(f"   {result['table'].upper()} Table:")
+        print(f"     - CSV: {result['csv_file']}")
+        if result['graph_file']:
+            print(f"     - Graph: {result['graph_file']}")
+    
+    if not all_results:
+        print("❌ All load tests failed")
         sys.exit(1)
 
 
