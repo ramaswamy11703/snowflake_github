@@ -11,3 +11,6 @@ Roughly speaking `snowflake_connection.py` and `clickhouse_connection.py` abstra
 `shared_loadtest.py` is the client driver. It is pretty simplistic: it fires off a bunch of threads that wake up every 1/qps seconds and send a request. 
 
 The rest is tabulating and plotting graphs.
+
+[lineitem][https://github.com/ramaswamy11703/snowflake_github/edit/main/loatest_comparison_lineitem.png] is the lineitem comparison.
+
