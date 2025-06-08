@@ -159,7 +159,7 @@ def test_connection(conn):
         return False
 
 
-def execute_single_query(conn, cursor, results_queue, is_warmup=False):
+def execute_single_query(conn, cursor, results_queue, table_config, is_warmup=False):
     """
     Execute a single query using existing connection and cursor
     
@@ -167,16 +167,17 @@ def execute_single_query(conn, cursor, results_queue, is_warmup=False):
         conn: Existing Snowflake connection
         cursor: Existing cursor for the connection
         results_queue: Queue to store results
+        table_config: Dictionary containing table configuration (database, schema, table, key_column, select_column, key_range)
         is_warmup: Whether this is a warmup query (results ignored)
     """
     try:
-        # Generate random orderkey between 1 and 6,000,000
-        random_orderkey = random.randint(1, 6000000)
+        # Generate random key within the specified range
+        random_key = random.randint(table_config['key_range'][0], table_config['key_range'][1])
         
         query = f"""
-        SELECT l_comment 
-        FROM SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.LINEITEM 
-        WHERE l_orderkey = {random_orderkey}
+        SELECT {table_config['select_column']} 
+        FROM {table_config['database']}.{table_config['schema']}.{table_config['table']} 
+        WHERE {table_config['key_column']} = {random_key}
         """
         
         start_time = time.time()
@@ -191,7 +192,7 @@ def execute_single_query(conn, cursor, results_queue, is_warmup=False):
             results_queue.put({
                 'success': True,
                 'time': query_time,
-                'orderkey': random_orderkey,
+                'key': random_key,
                 'result_count': len(results)
             })
         
@@ -238,7 +239,8 @@ def query_worker(worker_id, conn_params, query_queue, results_queue):
                     break
                 
                 is_warmup = task.get('is_warmup', False)
-                execute_single_query(conn, cursor, results_queue, is_warmup)
+                table_config = task.get('table_config')
+                execute_single_query(conn, cursor, results_queue, table_config, is_warmup)
                 query_queue.task_done()
                 
             except Exception as queue_error:
@@ -259,17 +261,19 @@ def query_worker(worker_id, conn_params, query_queue, results_queue):
             conn.close()
 
 
-def run_qps_load_test(conn_params, target_qps, warmup_seconds=30, run_seconds=60):
+def run_qps_load_test(conn_params, target_qps, table_config, warmup_seconds=30, run_seconds=60):
     """
     Run a QPS-based load test with warmup period using persistent connections
     
     Args:
         conn_params: Connection parameters dict
         target_qps: Target queries per second
+        table_config: Dictionary containing table configuration (database, schema, table, key_column, select_column, key_range)
         warmup_seconds: Duration of warmup phase
         run_seconds: Duration of actual test phase
     """
     print(f"\n=== Starting QPS Load Test ===")
+    print(f"Target Table: {table_config['database']}.{table_config['schema']}.{table_config['table']}")
     print(f"Target QPS: {target_qps}")
     print(f"Warmup period: {warmup_seconds} seconds")
     print(f"Test duration: {run_seconds} seconds")
@@ -306,7 +310,7 @@ def run_qps_load_test(conn_params, target_qps, warmup_seconds=30, run_seconds=60
     while time.time() < warmup_end:
         current_time = time.time()
         if current_time >= next_query_time:
-            query_queue.put({'is_warmup': True})
+            query_queue.put({'is_warmup': True, 'table_config': table_config})
             next_query_time += interval
         else:
             time.sleep(0.001)  # Small sleep to prevent busy waiting
@@ -323,7 +327,7 @@ def run_qps_load_test(conn_params, target_qps, warmup_seconds=30, run_seconds=60
     while time.time() < test_end:
         current_time = time.time()
         if current_time >= next_query_time:
-            query_queue.put({'is_warmup': False})
+            query_queue.put({'is_warmup': False, 'table_config': table_config})
             queries_submitted += 1
             next_query_time += interval
             
@@ -479,10 +483,42 @@ def main():
     
     # Configure test parameters
     qps_values = [10, 25, 50, 100, 200, 300]
-    warmup_seconds = 60    # Warmup duration
+    warmup_seconds = 60    # Warmup duration 
     run_seconds = 120      # Test duration
     
+    # Configure table to test against - MODIFY THIS TO CHANGE TARGET TABLE
+    # 
+    # Examples:
+    # For ORDERS table:
+    #   table: 'ORDERS', key_column: 'O_ORDERKEY', select_column: 'O_COMMENT', key_range: [1, 6000000] 
+    # For LINEITEM table:
+    #   table: 'LINEITEM', key_column: 'L_ORDERKEY', select_column: 'L_COMMENT', key_range: [1, 6000000]
+    # For CUSTOMER table: 
+    #   table: 'CUSTOMER', key_column: 'C_CUSTKEY', select_column: 'C_NAME', key_range: [1, 150000]
+    # For PART table:
+    #   table: 'PART', key_column: 'P_PARTKEY', select_column: 'P_NAME', key_range: [1, 200000]
+    #
+    table_config = {
+        'database': 'SNOWFLAKE_SAMPLE_DATA',
+        'schema': 'TPCH_SF1', 
+        'table': 'ORDERS',
+        'key_column': 'O_ORDERKEY',
+        'select_column': 'O_COMMENT',
+        'key_range': [1, 6000000]  # Range for random O_ORDERKEY selection
+    }
+    
+    table_config_old = {
+        'database': 'SNOWFLAKE_SAMPLE_DATA',
+        'schema': 'TPCH_SF1', 
+        'table': 'LINEITEM',
+        'key_column': 'L_ORDERKEY',
+        'select_column': 'L_COMMENT',
+        'key_range': [1, 6000000]  # Range for random O_ORDERKEY selection
+    }
     print(f"\n🚀 Starting comprehensive load test suite")
+    print(f"   Target Table: {table_config['database']}.{table_config['schema']}.{table_config['table']}")
+    print(f"   Key Column: {table_config['key_column']} (range: {table_config['key_range'][0]}-{table_config['key_range'][1]})")
+    print(f"   Select Column: {table_config['select_column']}")
     print(f"   QPS values to test: {qps_values}")
     print(f"   Warmup duration: {warmup_seconds}s")
     print(f"   Test duration: {run_seconds}s")
@@ -497,7 +533,7 @@ def main():
         print(f"🧪 Running test {i+1}/{len(qps_values)}: {target_qps} QPS")
         print(f"{'='*60}")
         
-        results = run_qps_load_test(conn_params, target_qps, warmup_seconds, run_seconds)
+        results = run_qps_load_test(conn_params, target_qps, table_config, warmup_seconds, run_seconds)
         
         if results:
             min_time, max_time, avg_time, median_time, p90, p95, p99, actual_qps, successful_queries, failed_queries = results
@@ -539,7 +575,7 @@ def main():
             })
     
     # Generate CSV
-    csv_filename = "snowflake_loadtest_results.csv"
+    csv_filename = f"snowflake_loadtest_results_{table_config['table']}.csv"
     
     print(f"\n📊 Generating CSV report: {csv_filename}")
     
@@ -599,7 +635,7 @@ def main():
                         xytext=(0,10), ha='center', fontsize=9)
         
         plt.tight_layout()
-        graph_filename = "snowflake_loadtest_graph.png"
+        graph_filename = f"snowflake_loadtest_graph_{table_config['table']}.png"
         plt.savefig(graph_filename, dpi=300, bbox_inches='tight')
         print(f"✅ Graph saved as: {graph_filename}")
         plt.show()
