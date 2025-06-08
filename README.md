@@ -14,6 +14,6 @@ The rest is tabulating and plotting graphs.
 
 [lineitem](https://github.com/ramaswamy11703/snowflake_github/blob/main/loadtest_comparison_lineitem.png) is the lineitem comparison across snowflake & clickhouse.
 
-[orders](https://github.com/ramaswamy11703/snowflake_github/edit/main/loatest_comparison_orders.png) is the orders table comparison.
+[orders](https://github.com/ramaswamy11703/snowflake_github/blob/main/loadtest_comparison_orders.png) is the orders table comparison.
 
 
