@@ -7,6 +7,7 @@ against different database systems (Snowflake, ClickHouse, etc.).
 """
 
 import sys
+import os
 import random
 import time
 import statistics
@@ -15,6 +16,8 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 import datetime
 import csv
+import glob
+import pandas as pd
 import matplotlib.pyplot as plt
 
 
@@ -375,7 +378,7 @@ def run_load_test_suite(connection_params, create_connection_func, execute_query
     return test_results
 
 
-def generate_reports(test_results, table_config, database_name="Database"):
+def generate_reports(test_results, table_config, database_name="Database", system_specs=None):
     """
     Generate CSV reports and performance graphs from test results
     
@@ -383,6 +386,7 @@ def generate_reports(test_results, table_config, database_name="Database"):
         test_results: List of test result dictionaries
         table_config: Dictionary containing table configuration
         database_name: Name of database system for file naming
+        system_specs: Optional system specifications string to display on graph
     """
     # Generate CSV
     csv_filename = f"{database_name.lower()}_loadtest_results_{table_config['table']}.csv"
@@ -444,6 +448,12 @@ def generate_reports(test_results, table_config, database_name="Database"):
             plt.annotate(f'{p99:.3f}', (qps, p99), textcoords="offset points", 
                         xytext=(0,10), ha='center', fontsize=9)
         
+        # Add system specifications caption if provided
+        if system_specs:
+            plt.figtext(0.98, 0.02, f'System Specifications: {system_specs}', 
+                       ha='right', va='bottom', fontsize=10, style='italic', color='gray')
+            plt.subplots_adjust(bottom=0.08)  # Make room for the caption
+        
         plt.tight_layout()
         graph_filename = f"{database_name.lower()}_loadtest_graph_{table_config['table']}.png"
         plt.savefig(graph_filename, dpi=300, bbox_inches='tight')
@@ -453,4 +463,228 @@ def generate_reports(test_results, table_config, database_name="Database"):
         return csv_filename, graph_filename
     else:
         print("❌ No successful test results to graph")
-        return csv_filename, None 
+        return csv_filename, None
+
+
+def load_csv_data(filepath):
+    """
+    Load and parse CSV data from load test results
+    
+    Args:
+        filepath: Path to CSV file
+    
+    Returns:
+        DataFrame with load test results
+    """
+    try:
+        df = pd.read_csv(filepath)
+        # Convert string numbers to float
+        numeric_columns = ['min', 'avg', 'median', 'p90', 'p95', 'p99', 'max', 'actual_qps']
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df
+    except Exception as e:
+        print(f"❌ Error loading {filepath}: {e}")
+        return None
+
+
+def generate_single_database_graph(csv_file, database_name, system_specs=None):
+    """
+    Generate performance graph from a single CSV file
+    
+    Args:
+        csv_file: Path to CSV file
+        database_name: Name of database system
+        system_specs: Optional system specifications string
+    
+    Returns:
+        Path to generated graph file or None if failed
+    """
+    data = load_csv_data(csv_file)
+    if data is None:
+        return None
+    
+    # Extract table name from filename
+    basename = os.path.basename(csv_file)
+    if basename.startswith(f'{database_name.lower()}_loadtest_results_'):
+        table_name = basename.replace(f'{database_name.lower()}_loadtest_results_', '').replace('.csv', '')
+    else:
+        table_name = 'unknown'
+    
+    plt.figure(figsize=(12, 8))
+    
+    # Database-specific colors
+    if database_name.lower() == 'snowflake':
+        color = '#29B5E8'  # Snowflake blue
+    elif database_name.lower() == 'clickhouse':
+        color = '#FFCC02'  # ClickHouse yellow
+    else:
+        color = '#1f77b4'  # Default blue
+    
+    plt.plot(data['qps'], data['median'], 'o-', label='Median Response Time', 
+             color=color, linewidth=2, markersize=8)
+    plt.plot(data['qps'], data['p99'], 's-', label='99th Percentile Response Time', 
+             color=color, linewidth=2, markersize=8, alpha=0.7)
+    
+    plt.xlabel('Target QPS', fontsize=12)
+    plt.ylabel('Response Time (seconds)', fontsize=12)
+    plt.title(f'{database_name} Load Test Results: Response Time vs QPS for {table_name.upper()} table', 
+              fontsize=14)
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
+    plt.yscale('log')  # Log scale for better visualization
+    
+    # Annotate points with values
+    for i, (qps, median, p99) in enumerate(zip(data['qps'], data['median'], data['p99'])):
+        plt.annotate(f'{median:.3f}', (qps, median), textcoords="offset points", 
+                    xytext=(0,10), ha='center', fontsize=9)
+        plt.annotate(f'{p99:.3f}', (qps, p99), textcoords="offset points", 
+                    xytext=(0,10), ha='center', fontsize=9)
+    
+    # Add system specifications caption if provided
+    if system_specs:
+        plt.figtext(0.98, 0.02, f'System Specifications: {system_specs}', 
+                   ha='right', va='bottom', fontsize=10, style='italic', color='gray')
+        plt.subplots_adjust(bottom=0.08)  # Make room for the caption
+    
+    plt.tight_layout()
+    
+    # Save the graph
+    graph_filename = f"{database_name.lower()}_loadtest_graph_{table_name}.png"
+    plt.savefig(graph_filename, dpi=300, bbox_inches='tight')
+    plt.close()  # Close to free memory
+    
+    return graph_filename
+
+
+def generate_comparison_graph(snowflake_csv, clickhouse_csv, table_name):
+    """
+    Generate comparison graph from two CSV files (Snowflake vs ClickHouse)
+    
+    Args:
+        snowflake_csv: Path to Snowflake CSV file
+        clickhouse_csv: Path to ClickHouse CSV file
+        table_name: Name of the table being compared
+    
+    Returns:
+        Path to generated comparison graph or None if failed
+    """
+    snowflake_data = load_csv_data(snowflake_csv) if snowflake_csv else None
+    clickhouse_data = load_csv_data(clickhouse_csv) if clickhouse_csv else None
+    
+    if snowflake_data is None and clickhouse_data is None:
+        print(f"❌ No valid data found for {table_name} comparison")
+        return None
+    
+    # Create two subplots: one for median, one for p99
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
+    
+    # Colors for each database
+    snowflake_color = '#29B5E8'  # Snowflake blue
+    clickhouse_color = '#FFCC02'  # ClickHouse yellow
+    
+    # Plot 1: Median Response Times
+    if snowflake_data is not None:
+        ax1.plot(snowflake_data['qps'], snowflake_data['median'], 
+                'o-', label='Snowflake', color=snowflake_color, 
+                linewidth=3, markersize=8, markerfacecolor='white', markeredgewidth=2)
+    
+    if clickhouse_data is not None:
+        ax1.plot(clickhouse_data['qps'], clickhouse_data['median'], 
+                's-', label='ClickHouse', color=clickhouse_color,
+                linewidth=3, markersize=8, markerfacecolor='white', markeredgewidth=2)
+    
+    ax1.set_xlabel('Queries Per Second (QPS)', fontsize=12)
+    ax1.set_ylabel('Median Response Time (seconds)', fontsize=12)
+    ax1.set_title(f'{table_name.upper()} Table - Median Response Time Comparison', fontsize=14, fontweight='bold')
+    ax1.legend(fontsize=12)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_yscale('log')
+    
+    # Annotate points with values for median
+    if snowflake_data is not None:
+        for qps, median in zip(snowflake_data['qps'], snowflake_data['median']):
+            ax1.annotate(f'{median:.3f}', (qps, median), textcoords="offset points", 
+                        xytext=(0,15), ha='center', fontsize=9, color=snowflake_color, fontweight='bold')
+    
+    if clickhouse_data is not None:
+        for qps, median in zip(clickhouse_data['qps'], clickhouse_data['median']):
+            ax1.annotate(f'{median:.3f}', (qps, median), textcoords="offset points", 
+                        xytext=(0,-20), ha='center', fontsize=9, color=clickhouse_color, fontweight='bold')
+    
+    # Plot 2: P99 Response Times
+    if snowflake_data is not None:
+        ax2.plot(snowflake_data['qps'], snowflake_data['p99'], 
+                'o-', label='Snowflake', color=snowflake_color,
+                linewidth=3, markersize=8, markerfacecolor='white', markeredgewidth=2)
+    
+    if clickhouse_data is not None:
+        ax2.plot(clickhouse_data['qps'], clickhouse_data['p99'], 
+                's-', label='ClickHouse', color=clickhouse_color,
+                linewidth=3, markersize=8, markerfacecolor='white', markeredgewidth=2)
+    
+    ax2.set_xlabel('Queries Per Second (QPS)', fontsize=12)
+    ax2.set_ylabel('99th Percentile Response Time (seconds)', fontsize=12)
+    ax2.set_title(f'{table_name.upper()} Table - 99th Percentile Response Time Comparison', fontsize=14, fontweight='bold')
+    ax2.legend(fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    ax2.set_yscale('log')
+    
+    # Annotate points with values for p99
+    if snowflake_data is not None:
+        for qps, p99 in zip(snowflake_data['qps'], snowflake_data['p99']):
+            ax2.annotate(f'{p99:.3f}', (qps, p99), textcoords="offset points", 
+                        xytext=(0,15), ha='center', fontsize=9, color=snowflake_color, fontweight='bold')
+    
+    if clickhouse_data is not None:
+        for qps, p99 in zip(clickhouse_data['qps'], clickhouse_data['p99']):
+            ax2.annotate(f'{p99:.3f}', (qps, p99), textcoords="offset points", 
+                        xytext=(0,-20), ha='center', fontsize=9, color=clickhouse_color, fontweight='bold')
+    
+    # Add system specifications caption at the bottom right
+    fig.text(0.98, 0.02, 'System Specifications: Snowflake XS (8 core, 16GB) • ClickHouse (4 core, 16GB)', 
+             ha='right', va='bottom', fontsize=10, style='italic', color='gray')
+    
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.08)  # Make room for the caption
+    
+    # Save the graph
+    filename = f"loadtest_comparison_{table_name.lower()}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()  # Close to free memory
+    
+    return filename
+
+
+def find_loadtest_csv_files():
+    """
+    Find all loadtest CSV files in the current directory
+    
+    Returns:
+        Dictionary with found CSV files organized by database and table
+    """
+    csv_files = {
+        'snowflake': {},
+        'clickhouse': {}
+    }
+    
+    # Find all CSV files matching load test patterns
+    patterns = [
+        'snowflake_loadtest_results_*.csv',
+        'clickhouse_loadtest_results_*.csv'
+    ]
+    
+    for pattern in patterns:
+        files = glob.glob(pattern)
+        for file in files:
+            filename = os.path.basename(file)
+            
+            if filename.startswith('snowflake_loadtest_results_'):
+                table_name = filename.replace('snowflake_loadtest_results_', '').replace('.csv', '')
+                csv_files['snowflake'][table_name.lower()] = file
+            elif filename.startswith('clickhouse_loadtest_results_'):
+                table_name = filename.replace('clickhouse_loadtest_results_', '').replace('.csv', '')
+                csv_files['clickhouse'][table_name.lower()] = file
+    
+    return csv_files 

@@ -145,7 +145,7 @@ def main():
         
         if test_results:
             # Generate reports using shared framework
-            csv_file, graph_file = generate_reports(test_results, table_config, "ClickHouse")
+            csv_file, graph_file = generate_reports(test_results, table_config, "ClickHouse", "ClickHouse (4 core, 16GB)")
             
             print(f"\n✅ {table_name.upper()} load test completed!")
             print(f"   CSV report: {csv_file}")
