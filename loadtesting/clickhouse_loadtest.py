@@ -7,6 +7,8 @@ It tests the tpc_h database tables (lineitem, orders) with configurable QPS load
 """
 
 import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from clickhouse_connection import connect_to_clickhouse, test_connection
 from shared_loadtest import run_load_test_suite, generate_reports
 

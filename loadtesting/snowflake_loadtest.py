@@ -8,6 +8,8 @@ It tests the SNOWFLAKE_SAMPLE_DATA.TPCH_SF1 tables with configurable QPS loads.
 
 import sys
 import snowflake.connector
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from snowflake_connection import connect_to_snowflake, test_connection, get_connection_params
 from shared_loadtest import run_load_test_suite, generate_reports
 
