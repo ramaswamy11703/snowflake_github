@@ -9,8 +9,18 @@ via Snowflake-GitHub integration.
 
 import streamlit as st
 import pandas as pd
-from snowflake_connection import connect_to_snowflake
 import os
+
+# Only import local connection module if not running in Snowflake
+try:
+    # Check if we're running in Snowflake environment
+    if 'SNOWFLAKE_ACCOUNT' not in os.environ:
+        from snowflake_connection import connect_to_snowflake
+    else:
+        connect_to_snowflake = None
+except ImportError:
+    # If import fails, we're likely in Snowflake environment
+    connect_to_snowflake = None
 
 # Set page config
 st.set_page_config(
@@ -24,14 +34,25 @@ def get_snowflake_connection():
     Get Snowflake connection - handles both local and Snowflake environments
     """
     try:
-        # Check if running in Snowflake (Snowflake provides connection automatically)
-        if hasattr(st, 'connection') and 'snowflake' in dir(st.connection):
-            # Running in Snowflake - use built-in connection
+        # First try to use Snowflake's built-in connection (when running in Snowflake)
+        try:
             return st.connection('snowflake')
-        else:
-            # Running locally - use our connection module
+        except:
+            pass
+        
+        # If that fails, try the experimental connection
+        try:
+            return st.experimental_connection('snowflake')
+        except:
+            pass
+            
+        # If still no luck and we have our local connection module, use it
+        if connect_to_snowflake is not None:
             config_path = "/Users/srramaswamy/.snowsql/config"
             return connect_to_snowflake("my_conn", config_path)
+        else:
+            raise Exception("No connection method available")
+            
     except Exception as e:
         st.error(f"Connection error: {e}")
         return None

@@ -3,10 +3,7 @@
 
 name: streamlit-env
 channels:
-  - conda-forge
-  - pyviz
+  - snowflake
 dependencies:
-  - python=3.9
-  - pandas>=1.5.0
-  - streamlit>=1.28.0
-  - snowflake-connector-python>=3.6.0 
+  - streamlit
+  - pandas 
