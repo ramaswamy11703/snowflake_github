@@ -32,6 +32,27 @@ The load testing framework is pretty simplistic: it fires off a bunch of threads
 
 [orders](https://github.com/ramaswamy11703/snowflake_github/blob/main/loadtesting/loadtest_comparison_orders.png) is the orders table comparison.
 
+## Streamlit Database Explorer
+
+### 🚀 New Streamlit App
+We've added a Streamlit application (`streamlit_app.py`) that provides a web interface to explore your Snowflake databases.
+
+**Features:**
+- 📊 Interactive database listing
+- 🔗 Automatic Snowflake connection
+- 📈 Database statistics and metrics
+- 🌐 Runs locally and in Snowflake
+
+**Run locally:**
+```bash
+python3 -m streamlit run streamlit_app.py
+```
+
+**Deploy to Snowflake:**
+1. Sync this repository with Snowflake using GitHub integration
+2. Create a Streamlit app in Snowflake pointing to `streamlit_app.py`
+3. The app will automatically use Snowflake's built-in connection
+
 ## Running Load Tests
 
 ### Option 1: Using the convenience script (recommended)
