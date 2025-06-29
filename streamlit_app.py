@@ -36,40 +36,28 @@ def get_snowflake_connection():
     try:
         # First try to use Snowflake's built-in connection (when running in Snowflake)
         try:
-            st.info("Attempting to use st.connection('snowflake')")
-            conn = st.connection('snowflake')
-            st.success("Successfully created st.connection('snowflake')")
-            return conn
+            return st.connection('snowflake')
         except Exception as e1:
-            st.warning(f"st.connection('snowflake') failed: {e1}")
+            pass
         
         # If that fails, try the experimental connection
         try:
-            st.info("Attempting to use st.experimental_connection('snowflake')")
-            conn = st.experimental_connection('snowflake')
-            st.success("Successfully created st.experimental_connection('snowflake')")
-            return conn
+            return st.experimental_connection('snowflake')
         except Exception as e2:
-            st.warning(f"st.experimental_connection('snowflake') failed: {e2}")
+            pass
         
         # Try without specifying connection name
         try:
-            st.info("Attempting to use st.connection() without name")
-            conn = st.connection()
-            st.success("Successfully created st.connection()")
-            return conn
+            return st.connection()
         except Exception as e3:
-            st.warning(f"st.connection() failed: {e3}")
+            pass
             
         # If still no luck and we have our local connection module, use it
         if connect_to_snowflake is not None:
-            st.info("Attempting to use local connection module")
             config_path = "/Users/srramaswamy/.snowsql/config"
-            conn = connect_to_snowflake("my_conn", config_path)
-            st.success("Successfully created local connection")
-            return conn
+            return connect_to_snowflake("my_conn", config_path)
         else:
-            raise Exception("No connection method available - all attempts failed")
+            raise Exception("No connection method available")
             
     except Exception as e:
         st.error(f"Connection error: {e}")
@@ -82,44 +70,25 @@ def get_databases(conn):
     Get list of all databases from Snowflake
     """
     try:
-        # Debug: Show connection type
-        st.info(f"Connection type: {type(conn)}")
-        
         if hasattr(conn, 'query'):
             # Snowflake built-in connection (when running in Snowflake)
-            st.info("Using Snowflake built-in connection")
+            # Try INFORMATION_SCHEMA first since SHOW DATABASES has issues in Streamlit
             try:
-                result = conn.query("SHOW DATABASES")
-                st.info(f"Query result type: {type(result)}")
-                st.info(f"Query result shape: {result.shape if hasattr(result, 'shape') else 'No shape attribute'}")
-                if hasattr(result, 'columns'):
-                    st.info(f"Query result columns: {list(result.columns)}")
+                result = conn.query("SELECT DATABASE_NAME, DATABASE_OWNER, COMMENT FROM INFORMATION_SCHEMA.DATABASES ORDER BY DATABASE_NAME")
                 return result
-            except Exception as query_error:
-                st.error(f"Query error with built-in connection: {query_error}")
-                # Try alternative query methods
+            except Exception as info_error:
+                # Fallback to SHOW DATABASES if INFORMATION_SCHEMA fails
                 try:
-                    # First try with correct INFORMATION_SCHEMA columns
-                    result = conn.query("SELECT DATABASE_NAME, DATABASE_OWNER, COMMENT FROM INFORMATION_SCHEMA.DATABASES ORDER BY DATABASE_NAME")
-                    st.info("✅ Used INFORMATION_SCHEMA.DATABASES successfully")
+                    result = conn.query("SHOW DATABASES")
                     return result
-                except Exception as alt_error1:
-                    st.warning(f"INFORMATION_SCHEMA query failed: {alt_error1}")
+                except Exception as show_error:
+                    # Try simple query as last resort
                     try:
-                        # Try even simpler query
                         result = conn.query("SELECT DATABASE_NAME FROM INFORMATION_SCHEMA.DATABASES ORDER BY DATABASE_NAME")
-                        st.info("✅ Used simple INFORMATION_SCHEMA query successfully")
                         return result
-                    except Exception as alt_error2:
-                        st.error(f"Simple query also failed: {alt_error2}")
-                        try:
-                            # Last resort: try SHOW DATABASES with different approach
-                            result = conn.query("SHOW DATABASES;")
-                            st.info("✅ SHOW DATABASES with semicolon worked")
-                            return result
-                        except Exception as final_error:
-                            st.error(f"All query methods failed: {final_error}")
-                            return None
+                    except Exception as simple_error:
+                        st.error(f"All database queries failed. Info: {info_error}, Show: {show_error}, Simple: {simple_error}")
+                        return None
         else:
             # Regular snowflake-connector connection (when running locally)
             st.info("Using regular snowflake-connector connection")
@@ -166,26 +135,20 @@ def main():
     
     st.success("✅ Successfully connected to Snowflake!")
     
-    # Test the connection with a simple query first
-    st.markdown("### 🔍 Testing Connection")
+    # Show connection info
     try:
         if hasattr(conn, 'query'):
             test_result = conn.query("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE()")
-            st.success("✅ Connection test successful!")
-            st.info(f"Current User: {test_result.iloc[0, 0] if not test_result.empty else 'Unknown'}")
-            st.info(f"Current Account: {test_result.iloc[0, 1] if not test_result.empty else 'Unknown'}")
-            st.info(f"Current Warehouse: {test_result.iloc[0, 2] if not test_result.empty else 'Unknown'}")
+            if not test_result.empty:
+                st.info(f"Connected as: **{test_result.iloc[0, 0]}** | Account: **{test_result.iloc[0, 1]}** | Warehouse: **{test_result.iloc[0, 2]}**")
         else:
             cursor = conn.cursor()
             cursor.execute("SELECT CURRENT_USER(), CURRENT_ACCOUNT(), CURRENT_WAREHOUSE()")
             result = cursor.fetchone()
             cursor.close()
-            st.success("✅ Connection test successful!")
-            st.info(f"Current User: {result[0]}")
-            st.info(f"Current Account: {result[1]}")
-            st.info(f"Current Warehouse: {result[2]}")
+            st.info(f"Connected as: **{result[0]}** | Account: **{result[1]}** | Warehouse: **{result[2]}**")
     except Exception as test_error:
-        st.error(f"❌ Connection test failed: {test_error}")
+        pass  # Don't show errors for connection info
     
     # Fetch and display databases
     st.markdown("### 📚 Available Databases")
@@ -232,8 +195,7 @@ def main():
             else:
                 st.metric("Database Columns", len(databases_df.columns))
         
-        # Show column information for debugging
-        st.info(f"Available columns: {list(databases_df.columns)}")
+
         
         # Expandable section with raw data
         with st.expander("🔍 View Raw Database Information"):
