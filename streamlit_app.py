@@ -91,16 +91,35 @@ def get_databases(conn):
             try:
                 result = conn.query("SHOW DATABASES")
                 st.info(f"Query result type: {type(result)}")
+                st.info(f"Query result shape: {result.shape if hasattr(result, 'shape') else 'No shape attribute'}")
+                if hasattr(result, 'columns'):
+                    st.info(f"Query result columns: {list(result.columns)}")
                 return result
             except Exception as query_error:
                 st.error(f"Query error with built-in connection: {query_error}")
-                # Try alternative query method
+                # Try alternative query methods
                 try:
-                    result = conn.query("SELECT DATABASE_NAME, DATABASE_OWNER, IS_DEFAULT, COMMENT FROM INFORMATION_SCHEMA.DATABASES")
+                    # First try with correct INFORMATION_SCHEMA columns
+                    result = conn.query("SELECT DATABASE_NAME, DATABASE_OWNER, COMMENT FROM INFORMATION_SCHEMA.DATABASES ORDER BY DATABASE_NAME")
+                    st.info("✅ Used INFORMATION_SCHEMA.DATABASES successfully")
                     return result
-                except Exception as alt_error:
-                    st.error(f"Alternative query also failed: {alt_error}")
-                    return None
+                except Exception as alt_error1:
+                    st.warning(f"INFORMATION_SCHEMA query failed: {alt_error1}")
+                    try:
+                        # Try even simpler query
+                        result = conn.query("SELECT DATABASE_NAME FROM INFORMATION_SCHEMA.DATABASES ORDER BY DATABASE_NAME")
+                        st.info("✅ Used simple INFORMATION_SCHEMA query successfully")
+                        return result
+                    except Exception as alt_error2:
+                        st.error(f"Simple query also failed: {alt_error2}")
+                        try:
+                            # Last resort: try SHOW DATABASES with different approach
+                            result = conn.query("SHOW DATABASES;")
+                            st.info("✅ SHOW DATABASES with semicolon worked")
+                            return result
+                        except Exception as final_error:
+                            st.error(f"All query methods failed: {final_error}")
+                            return None
         else:
             # Regular snowflake-connector connection (when running locally)
             st.info("Using regular snowflake-connector connection")
@@ -200,9 +219,21 @@ def main():
         
         with col3:
             # Show if any sample databases are present
-            if 'NAME' in databases_df.columns:
-                sample_count = len(databases_df[databases_df['NAME'].str.contains('SAMPLE', case=False, na=False)])
+            # Check for different possible column names
+            name_column = None
+            for col in ['NAME', 'DATABASE_NAME', 'name', 'database_name']:
+                if col in databases_df.columns:
+                    name_column = col
+                    break
+            
+            if name_column:
+                sample_count = len(databases_df[databases_df[name_column].str.contains('SAMPLE', case=False, na=False)])
                 st.metric("Sample Databases", sample_count)
+            else:
+                st.metric("Database Columns", len(databases_df.columns))
+        
+        # Show column information for debugging
+        st.info(f"Available columns: {list(databases_df.columns)}")
         
         # Expandable section with raw data
         with st.expander("🔍 View Raw Database Information"):
