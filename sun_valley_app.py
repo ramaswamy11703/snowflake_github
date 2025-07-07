@@ -95,17 +95,10 @@ def set_database_context(conn, database=DEFAULT_DATABASE, schema=DEFAULT_SCHEMA)
         if hasattr(conn, 'query'):
             # Snowflake built-in connection (when running in Snowflake)
             st.info("Using Snowflake built-in connection for context setting...")
-            try:
-                conn.query(f"USE DATABASE {database}")
-                st.success(f"✅ Database set to: {database}")
-                conn.query(f"USE SCHEMA {schema}")
-                st.success(f"✅ Schema set to: {schema}")
-                return True
-            except Exception as snowflake_error:
-                st.warning(f"⚠️ Could not set context in Snowflake environment: {snowflake_error}")
-                st.info("This is normal when running inside Snowflake with limited privileges")
-                st.info("Continuing with current context...")
-                return True  # Continue anyway, as context might already be set
+            st.info("⚠️ USE statements are not supported in Snowflake Streamlit environment")
+            st.info("The app will use fully qualified table names instead")
+            st.info("Continuing with current context...")
+            return True  # Skip USE statements in Snowflake environment
         else:
             # Regular snowflake-connector connection (when running locally)
             st.info("Using regular snowflake-connector connection for context setting...")
@@ -179,22 +172,27 @@ def get_tables_in_schema(conn, database=DEFAULT_DATABASE, schema=DEFAULT_SCHEMA)
             # Snowflake built-in connection (when running in Snowflake)
             st.info("Using Snowflake built-in connection...")
             
-            # Try multiple approaches for Snowflake environment
+            # Try multiple approaches for Snowflake environment (avoiding SHOW commands)
             approaches = [
-                # Approach 1: Simple SHOW TABLES (most likely to work in Snowflake)
-                ("SHOW TABLES", "SHOW TABLES"),
+                # Approach 1: INFORMATION_SCHEMA with fully qualified name and uppercase schema
+                ("INFORMATION_SCHEMA (fully qualified, uppercase)", 
+                 f"SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, CREATED, LAST_ALTERED, COMMENT FROM {database.upper()}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema.upper()}' ORDER BY TABLE_NAME"),
                 
-                # Approach 2: INFORMATION_SCHEMA with current context
+                # Approach 2: INFORMATION_SCHEMA with mixed case
+                ("INFORMATION_SCHEMA (mixed case)", 
+                 f"SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, CREATED, LAST_ALTERED, COMMENT FROM {database}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema.upper()}' ORDER BY TABLE_NAME"),
+                
+                # Approach 3: INFORMATION_SCHEMA with lowercase
+                ("INFORMATION_SCHEMA (lowercase)", 
+                 f"SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, CREATED, LAST_ALTERED, COMMENT FROM {database.lower()}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema.lower()}' ORDER BY TABLE_NAME"),
+                
+                # Approach 4: Simplified query with just table name
+                ("INFORMATION_SCHEMA (simple)", 
+                 f"SELECT TABLE_NAME FROM {database.upper()}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema.upper()}' ORDER BY TABLE_NAME"),
+                
+                # Approach 5: Try without database prefix (use current context)
                 ("INFORMATION_SCHEMA (current context)", 
-                 "SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, CREATED, LAST_ALTERED, COMMENT FROM INFORMATION_SCHEMA.TABLES ORDER BY TABLE_NAME"),
-                
-                # Approach 3: INFORMATION_SCHEMA with explicit schema filter
-                ("INFORMATION_SCHEMA (explicit schema)", 
-                 f"SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, CREATED, LAST_ALTERED, COMMENT FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema.upper()}' ORDER BY TABLE_NAME"),
-                
-                # Approach 4: INFORMATION_SCHEMA with database prefix
-                ("INFORMATION_SCHEMA (database prefix)", 
-                 f"SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, CREATED, LAST_ALTERED, COMMENT FROM {database}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema.upper()}' ORDER BY TABLE_NAME")
+                 f"SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, CREATED, LAST_ALTERED, COMMENT FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema.upper()}' ORDER BY TABLE_NAME")
             ]
             
             for approach_name, query in approaches:
@@ -238,42 +236,67 @@ def get_tables_in_schema(conn, database=DEFAULT_DATABASE, schema=DEFAULT_SCHEMA)
             current_context = cursor.fetchone()
             st.info(f"Current context: Database={current_context[0]}, Schema={current_context[1]}")
             
-            # Try a simpler query first
-            st.info("Trying SHOW TABLES first...")
-            show_tables_result = []
-            try:
-                cursor.execute("SHOW TABLES")
-                show_tables_result = cursor.fetchall()
-                st.info(f"SHOW TABLES returned {len(show_tables_result)} tables")
-                for table in show_tables_result:
-                    st.write(f"  - {table[1] if len(table) > 1 else table[0]}")
-            except Exception as show_error:
-                st.warning(f"SHOW TABLES failed: {show_error}")
+            # Try INFORMATION_SCHEMA queries for local connection
+            st.info("Using INFORMATION_SCHEMA queries for local connection...")
             
-            # If SHOW TABLES found tables, use that data instead of INFORMATION_SCHEMA
-            if show_tables_result:
-                st.info("Using SHOW TABLES results since they were found...")
-                # Convert SHOW TABLES result to DataFrame with expected columns
-                show_columns = [desc[0] for desc in cursor.description]
-                st.info(f"SHOW TABLES columns: {show_columns}")
+            # Try different variations of the query
+            local_approaches = [
+                # Approach 1: With database prefix and uppercase schema
+                ("INFORMATION_SCHEMA (database prefix, uppercase)", 
+                 f"SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, CREATED, LAST_ALTERED, COMMENT FROM {database.upper()}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema.upper()}' ORDER BY TABLE_NAME"),
                 
-                # Create a DataFrame with the expected structure
-                table_data = []
-                for row in show_tables_result:
-                    table_data.append({
-                        'TABLE_NAME': row[1] if len(row) > 1 else row[0],  # Table name
-                        'TABLE_TYPE': 'BASE TABLE',  # Default type
-                        'ROW_COUNT': None,  # Not available in SHOW TABLES
-                        'BYTES': None,  # Not available in SHOW TABLES
-                        'CREATED': row[0] if len(row) > 0 else None,  # Created date might be first column
-                        'LAST_ALTERED': None,  # Not available in SHOW TABLES
-                        'COMMENT': row[6] if len(row) > 6 else None  # Comment might be in column 6
-                    })
+                # Approach 2: Without database prefix
+                ("INFORMATION_SCHEMA (no prefix)", 
+                 f"SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, CREATED, LAST_ALTERED, COMMENT FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema.upper()}' ORDER BY TABLE_NAME"),
                 
-                result_df = pd.DataFrame(table_data)
-                st.success(f"Successfully created DataFrame from SHOW TABLES with shape: {result_df.shape}")
-                cursor.close()
-                return result_df
+                # Approach 3: Try SHOW TABLES as fallback
+                ("SHOW TABLES (fallback)", "SHOW TABLES")
+            ]
+            
+            for approach_name, query in local_approaches:
+                try:
+                    st.info(f"Trying local approach: {approach_name}")
+                    cursor.execute(query)
+                    
+                    if "SHOW TABLES" in query:
+                        # Handle SHOW TABLES result
+                        show_tables_result = cursor.fetchall()
+                        st.info(f"SHOW TABLES returned {len(show_tables_result)} tables")
+                        
+                        if show_tables_result:
+                            # Convert SHOW TABLES result to DataFrame
+                            table_data = []
+                            for row in show_tables_result:
+                                table_data.append({
+                                    'TABLE_NAME': row[1] if len(row) > 1 else row[0],
+                                    'TABLE_TYPE': 'BASE TABLE',
+                                    'ROW_COUNT': None,
+                                    'BYTES': None,
+                                    'CREATED': None,
+                                    'LAST_ALTERED': None,
+                                    'COMMENT': None
+                                })
+                            result_df = pd.DataFrame(table_data)
+                            st.success(f"✅ {approach_name} succeeded with {len(result_df)} tables!")
+                            cursor.close()
+                            return result_df
+                    else:
+                        # Handle INFORMATION_SCHEMA result
+                        columns = [desc[0] for desc in cursor.description]
+                        data = cursor.fetchall()
+                        st.info(f"Query returned {len(data)} rows with columns: {columns}")
+                        
+                        if data:
+                            result_df = pd.DataFrame(data, columns=columns)
+                            st.success(f"✅ {approach_name} succeeded with {len(result_df)} tables!")
+                            cursor.close()
+                            return result_df
+                        else:
+                            st.warning(f"Query succeeded but returned 0 tables")
+                            
+                except Exception as local_error:
+                    st.warning(f"❌ {approach_name} failed: {local_error}")
+                    continue
             
             # If SHOW TABLES didn't work, try the INFORMATION_SCHEMA query
             st.info("SHOW TABLES didn't find tables, trying INFORMATION_SCHEMA query...")
@@ -328,10 +351,12 @@ def get_table_preview(conn, table_name, database=DEFAULT_DATABASE, schema=DEFAUL
     Get a preview of data from a specific table
     """
     try:
-        query = f"SELECT * FROM {database}.{schema}.{table_name} LIMIT {limit}"
+        # Use fully qualified table name with proper casing
+        query = f"SELECT * FROM {database.upper()}.{schema.upper()}.{table_name} LIMIT {limit}"
         
         if hasattr(conn, 'query'):
             # Snowflake built-in connection (when running in Snowflake)
+            st.info(f"Executing preview query: {query}")
             result = conn.query(query)
             return result
         else:
@@ -344,13 +369,31 @@ def get_table_preview(conn, table_name, database=DEFAULT_DATABASE, schema=DEFAUL
             return pd.DataFrame(data, columns=columns)
     except Exception as e:
         st.error(f"Error fetching table preview: {str(e)}")
-        return None
+        # Try alternative query formats
+        try:
+            alt_query = f"SELECT * FROM {database}.{schema}.{table_name} LIMIT {limit}"
+            st.info(f"Trying alternative query: {alt_query}")
+            
+            if hasattr(conn, 'query'):
+                result = conn.query(alt_query)
+                return result
+            else:
+                cursor = conn.cursor()
+                cursor.execute(alt_query)
+                columns = [desc[0] for desc in cursor.description]
+                data = cursor.fetchall()
+                cursor.close()
+                return pd.DataFrame(data, columns=columns)
+        except Exception as alt_e:
+            st.error(f"Alternative query also failed: {str(alt_e)}")
+            return None
 
 def get_column_info(conn, table_name, database=DEFAULT_DATABASE, schema=DEFAULT_SCHEMA):
     """
     Get column information for a specific table
     """
     try:
+        # Use fully qualified names with proper casing
         query = f"""
         SELECT 
             COLUMN_NAME,
@@ -358,13 +401,14 @@ def get_column_info(conn, table_name, database=DEFAULT_DATABASE, schema=DEFAULT_
             IS_NULLABLE,
             COLUMN_DEFAULT,
             COMMENT
-        FROM {database}.INFORMATION_SCHEMA.COLUMNS 
-        WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{table_name}'
+        FROM {database.upper()}.INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_SCHEMA = '{schema.upper()}' AND TABLE_NAME = '{table_name}'
         ORDER BY ORDINAL_POSITION
         """
         
         if hasattr(conn, 'query'):
             # Snowflake built-in connection (when running in Snowflake)
+            st.info(f"Executing column info query: {query}")
             result = conn.query(query)
             return result
         else:
@@ -377,7 +421,34 @@ def get_column_info(conn, table_name, database=DEFAULT_DATABASE, schema=DEFAULT_
             return pd.DataFrame(data, columns=columns)
     except Exception as e:
         st.error(f"Error fetching column info: {str(e)}")
-        return None
+        # Try alternative query formats
+        try:
+            alt_query = f"""
+            SELECT 
+                COLUMN_NAME,
+                DATA_TYPE,
+                IS_NULLABLE,
+                COLUMN_DEFAULT,
+                COMMENT
+            FROM {database}.INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = '{table_name}'
+            ORDER BY ORDINAL_POSITION
+            """
+            st.info(f"Trying alternative column query: {alt_query}")
+            
+            if hasattr(conn, 'query'):
+                result = conn.query(alt_query)
+                return result
+            else:
+                cursor = conn.cursor()
+                cursor.execute(alt_query)
+                columns = [desc[0] for desc in cursor.description]
+                data = cursor.fetchall()
+                cursor.close()
+                return pd.DataFrame(data, columns=columns)
+        except Exception as alt_e:
+            st.error(f"Alternative column query also failed: {str(alt_e)}")
+            return None
 
 def main():
     """
