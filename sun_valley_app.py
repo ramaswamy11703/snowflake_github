@@ -432,6 +432,73 @@ def get_table_preview(conn, table_name, database=DEFAULT_DATABASE, schema=DEFAUL
                 st.error(f"Alternative query also failed: {str(alt_e)}")
             return None
 
+def update_status(conn, record_id, new_status, database=DEFAULT_DATABASE, schema=DEFAULT_SCHEMA, debug=False):
+    """
+    Update the status of a record in the hybrid table
+    """
+    try:
+        # Use fully qualified table name
+        table_name = "SUNVALLEY_2025LIST_HYBRID"
+        
+        if hasattr(conn, 'query'):
+            # Snowflake built-in connection (when running in Snowflake)
+            update_query = f"""
+            UPDATE {database.upper()}.{schema.upper()}.{table_name}
+            SET STATUS = '{new_status}'
+            WHERE ID = {record_id}
+            """
+            
+            if debug:
+                st.info(f"Executing update query: {update_query}")
+            
+            result = conn.query(update_query)
+            
+            # Check if any rows were affected
+            if hasattr(result, 'rowcount') and result.rowcount == 0:
+                if debug:
+                    st.warning(f"No rows were updated for ID {record_id}")
+                return False
+            
+            return True
+        else:
+            # Regular snowflake-connector connection (when running locally)
+            cursor = conn.cursor()
+            
+            update_query = f"""
+            UPDATE {database.upper()}.{schema.upper()}.{table_name}
+            SET STATUS = %s
+            WHERE ID = %s
+            """
+            
+            if debug:
+                st.info(f"Executing update query: {update_query}")
+                st.info(f"Parameters: new_status='{new_status}', record_id={record_id}")
+            
+            cursor.execute(update_query, (new_status, record_id))
+            
+            # Check if any rows were affected
+            rows_affected = cursor.rowcount
+            if debug:
+                st.info(f"Rows affected: {rows_affected}")
+            
+            # Commit the transaction
+            conn.commit()
+            cursor.close()
+            
+            if rows_affected == 0:
+                if debug:
+                    st.warning(f"No rows were updated for ID {record_id}")
+                return False
+            
+            return True
+            
+    except Exception as e:
+        st.error(f"Error updating status: {str(e)}")
+        if debug:
+            import traceback
+            st.error(f"Full traceback:\n{traceback.format_exc()}")
+        return False
+
 def get_column_info(conn, table_name, database=DEFAULT_DATABASE, schema=DEFAULT_SCHEMA, debug=False):
     """
     Get column information for a specific table
@@ -582,8 +649,8 @@ def main():
         # Main content area - Status Summary
         st.markdown("### 📊 Sun Valley 2025 Status Summary")
         
-        # Get the main table data to analyze
-        main_table_name = tables_df['TABLE_NAME'].iloc[0] if 'TABLE_NAME' in tables_df.columns else 'SUNVALLEY_2025LIST'
+        # Get the main table data to analyze (using hybrid table)
+        main_table_name = 'SUNVALLEY_2025LIST_HYBRID'
         
         # Query the main table for status analysis
         try:
@@ -741,21 +808,89 @@ def main():
                         else:
                             st.info(f"**Showing all {len(detail_df):,} rows**")
                         
-                        # Display the filtered data
+                        # Display the filtered data with editing capabilities
                         if not filtered_df.empty:
-                            st.data_editor(
+                            st.markdown("#### 📝 Editable Data Table")
+                            st.markdown("**Note:** You can edit the STATUS column values directly in the table below. Changes will be saved to the database.")
+                            
+                            # Create column configuration for editing
+                            column_config = {}
+                            disabled_columns = []
+                            
+                            for col in filtered_df.columns:
+                                if col.upper() == 'STATUS':
+                                    # Make STATUS column editable with selectbox
+                                    column_config[col] = st.column_config.SelectboxColumn(
+                                        "Status",
+                                        width="medium",
+                                        options=['n/a', 'Confirmed', 'Investor meeting', 'Find at event', 'Pending'],
+                                        required=True
+                                    )
+                                elif col.upper() == 'ID':
+                                    # Hide ID column but keep it for updates
+                                    column_config[col] = st.column_config.NumberColumn(
+                                        "ID",
+                                        width="small"
+                                    )
+                                else:
+                                    # Make other columns read-only
+                                    column_config[col] = st.column_config.TextColumn(
+                                        col,
+                                        width="medium"
+                                    )
+                                    disabled_columns.append(col)
+                            
+                            # Display editable data
+                            edited_df = st.data_editor(
                                 filtered_df,
                                 use_container_width=True,
                                 hide_index=True,
-                                disabled=True,
                                 height=400,
-                                column_config={
-                                    col: st.column_config.TextColumn(
-                                        col,
-                                        width="medium"
-                                    ) for col in filtered_df.columns
-                                }
+                                column_config=column_config,
+                                disabled=disabled_columns,
+                                key="editable_data_table"
                             )
+                            
+                            # Check for changes and update database
+                            if not edited_df.equals(filtered_df):
+                                st.markdown("#### 💾 Saving Changes")
+                                
+                                if debug_mode:
+                                    st.info("Data has changed - processing updates...")
+                                
+                                # Find rows that have changed
+                                changes_made = False
+                                for idx in edited_df.index:
+                                    if idx in filtered_df.index:
+                                        original_status = filtered_df.loc[idx, 'STATUS']
+                                        new_status = edited_df.loc[idx, 'STATUS']
+                                        
+                                        if debug_mode:
+                                            st.info(f"Row {idx}: Original='{original_status}', New='{new_status}'")
+                                        
+                                        if original_status != new_status:
+                                            record_id = edited_df.loc[idx, 'ID']
+                                            person_name = edited_df.loc[idx, 'NAME']
+                                            
+                                            if debug_mode:
+                                                st.info(f"Updating record ID {record_id} for {person_name}")
+                                            
+                                            # Update the database
+                                            success = update_status(conn, record_id, new_status, DEFAULT_DATABASE, DEFAULT_SCHEMA, debug=debug_mode)
+                                            
+                                            if success:
+                                                st.success(f"✅ Updated status for {person_name} to '{new_status}'")
+                                                changes_made = True
+                                            else:
+                                                st.error(f"❌ Failed to update status for {person_name}")
+                                                if debug_mode:
+                                                    st.error(f"Record ID: {record_id}, New Status: '{new_status}'")
+                                
+                                if changes_made:
+                                    st.info("🔄 Please refresh the page to see all updated data")
+                                    if st.button("🔄 Refresh Data", key="refresh_after_edit"):
+                                        st.rerun()
+                                        
                         else:
                             st.warning("No rows match the current filters.")
                     
@@ -782,8 +917,8 @@ def main():
         st.markdown("### 📊 Pivot Table Analysis")
         
         try:
-            # Get the table data for pivot analysis (using the known table name)
-            pivot_table_name = "SUNVALLEY_2025LIST"  # The table we know exists
+            # Get the table data for pivot analysis (using the hybrid table)
+            pivot_table_name = "SUNVALLEY_2025LIST_HYBRID"  # The hybrid table we created
             pivot_data_df = get_table_preview(conn, pivot_table_name, DEFAULT_DATABASE, DEFAULT_SCHEMA, limit=10000, debug=debug_mode)
             
             if pivot_data_df is not None and not pivot_data_df.empty:
