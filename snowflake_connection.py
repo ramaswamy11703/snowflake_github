@@ -86,7 +86,8 @@ def connect_to_snowflake(connection_name="my_conn", config_path="~/.snowsql/conf
         account = section.get('accountname', section.get('account'))
         username = section.get('username', section.get('user'))
         private_key_path = section.get('private_key_path')
-        
+        password = section.get('password')
+
         # Remove quotes from paths if present
         if private_key_path:
             private_key_path = private_key_path.strip('"\'')
@@ -94,27 +95,41 @@ def connect_to_snowflake(connection_name="my_conn", config_path="~/.snowsql/conf
             account = account.strip('"\'')
         if username:
             username = username.strip('"\'')
-        
-        if not all([account, username, private_key_path]):
-            raise ValueError("Missing required connection parameters (account, username, private_key_path)")
-        
-        # Load private key
-        private_key_der = load_private_key(os.path.expanduser(private_key_path))
-        if private_key_der is None:
-            raise ValueError("Failed to load private key")
-        
+        if password:
+            password = password.strip('"\'')
+
+        if not account or not username:
+            raise ValueError("Missing required connection parameters (account, username)")
+
+        if not private_key_path and not password:
+            raise ValueError("Missing authentication method (private_key_path or password)")
+
         print(f"Connecting to Snowflake...")
         print(f"Account: {account}")
         print(f"Username: {username}")
-        print(f"Using JWT authentication with private key")
-        
-        # Create connection
-        conn = snowflake.connector.connect(
-            account=account,
-            user=username,
-            private_key=private_key_der,
-            authenticator='SNOWFLAKE_JWT'
-        )
+
+        # Create connection based on available authentication method
+        if private_key_path:
+            # Use JWT authentication with private key
+            private_key_der = load_private_key(os.path.expanduser(private_key_path))
+            if private_key_der is None:
+                raise ValueError("Failed to load private key")
+
+            print(f"Using JWT authentication with private key")
+            conn = snowflake.connector.connect(
+                account=account,
+                user=username,
+                private_key=private_key_der,
+                authenticator='SNOWFLAKE_JWT'
+            )
+        else:
+            # Use password authentication
+            print(f"Using password authentication")
+            conn = snowflake.connector.connect(
+                account=account,
+                user=username,
+                password=password
+            )
         
         print("✅ Successfully connected to Snowflake!")
         return conn
@@ -170,25 +185,35 @@ def get_connection_params(config_path="~/.snowsql/config", connection_name="my_c
         account = section.get('accountname', section.get('account'))
         username = section.get('username', section.get('user'))
         private_key_path = section.get('private_key_path')
-        
+        password = section.get('password')
+
         # Remove quotes from paths if present
         if private_key_path:
             private_key_path = private_key_path.strip('"\'')
         if account:
             account = account.strip('"\'')
         if username:
-            username = username.strip('"\'')  
-        
-        # Load private key
-        private_key_der = load_private_key(os.path.expanduser(private_key_path))
-        if private_key_der is None:
-            raise ValueError("Failed to load private key")
-        
-        return {
+            username = username.strip('"\'')
+        if password:
+            password = password.strip('"\'')
+
+        params = {
             'account': account,
-            'user': username,
-            'private_key': private_key_der
+            'user': username
         }
+
+        # Add authentication method
+        if private_key_path:
+            private_key_der = load_private_key(os.path.expanduser(private_key_path))
+            if private_key_der is None:
+                raise ValueError("Failed to load private key")
+            params['private_key'] = private_key_der
+        elif password:
+            params['password'] = password
+        else:
+            raise ValueError("Missing authentication method (private_key_path or password)")
+
+        return params
         
     except Exception as e:
         print(f"❌ Error getting connection parameters: {e}")

@@ -440,6 +440,12 @@ def update_status(conn, record_id, new_status, database=DEFAULT_DATABASE, schema
         # Use fully qualified table name
         table_name = "SUNVALLEY_2025LIST_HYBRID"
         
+        # Ensure record_id is a Python int (not numpy int64)
+        record_id = int(record_id)
+        
+        if debug:
+            st.info(f"Update parameters: record_id={record_id} (type: {type(record_id)}), new_status='{new_status}'")
+        
         if hasattr(conn, 'query'):
             # Snowflake built-in connection (when running in Snowflake)
             update_query = f"""
@@ -466,13 +472,13 @@ def update_status(conn, record_id, new_status, database=DEFAULT_DATABASE, schema
             
             update_query = f"""
             UPDATE {database.upper()}.{schema.upper()}.{table_name}
-            SET STATUS = %s
-            WHERE ID = %s
+            SET STATUS = ?
+            WHERE ID = ?
             """
             
             if debug:
                 st.info(f"Executing update query: {update_query}")
-                st.info(f"Parameters: new_status='{new_status}', record_id={record_id}")
+                st.info(f"Parameters: new_status='{new_status}' (type: {type(new_status)}), record_id={record_id} (type: {type(record_id)})")
             
             cursor.execute(update_query, (new_status, record_id))
             
@@ -869,11 +875,11 @@ def main():
                                             st.info(f"Row {idx}: Original='{original_status}', New='{new_status}'")
                                         
                                         if original_status != new_status:
-                                            record_id = edited_df.loc[idx, 'ID']
+                                            record_id = int(edited_df.loc[idx, 'ID'])  # Convert to Python int
                                             person_name = edited_df.loc[idx, 'NAME']
                                             
                                             if debug_mode:
-                                                st.info(f"Updating record ID {record_id} for {person_name}")
+                                                st.info(f"Updating record ID {record_id} (type: {type(record_id)}) for {person_name}")
                                             
                                             # Update the database
                                             success = update_status(conn, record_id, new_status, DEFAULT_DATABASE, DEFAULT_SCHEMA, debug=debug_mode)
